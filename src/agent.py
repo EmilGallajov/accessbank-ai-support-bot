@@ -92,6 +92,85 @@ def _override_language(text: str, classifier_lang: str) -> str:
 
     return classifier_lang
 
+
+# ---- Cross-turn language stickiness -------------------------------------
+#
+# Each user message goes through classify() independently, so a short
+# follow-up like "yox", "təşəkkür", or "men basa dusmedim" — which has no
+# diacritics and isn't in the AZ-word list — used to flip the bot to
+# English mid-conversation. We remember each user's last-resolved language
+# and prefer it for the next turn unless the new message is *clearly* the
+# other language.
+#
+# Storage is in-memory (single-instance demo bot); state resets on restart.
+
+_user_last_language: dict[str, str] = {}
+
+# English function words / common short responses. Used to detect when a
+# user has genuinely switched to English so stickiness doesn't trap them.
+_EN_COMMON_WORDS_RE = _re.compile(
+    r"\b("
+    r"the|and|but|or|nor|so|yet|"
+    r"what|when|where|why|how|which|whose|whom|"
+    r"can|could|should|would|will|won't|don't|doesn't|isn't|aren't|wasn't|weren't|"
+    r"i'm|i've|i'll|i'd|you're|you've|you'll|they're|we're|"
+    r"my|your|his|her|its|our|their|"
+    r"is|are|was|were|been|being|have|has|had|having|do|does|did|doing|"
+    r"this|that|these|those|"
+    r"please|thanks|thank|hello|hi|hey|"
+    r"about|with|from|into|onto|through|over|under|between|"
+    r"because|since|although|though|unless|until|while|"
+    r"need|want|like|know|think|see|tell|give|take|make|"
+    r"there|here|where|now|then|today|tomorrow|yesterday|"
+    r"problem|issue|error|account|card|transfer|loan|branch|balance|mobile|app|login"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+
+def _looks_clearly_english(text: str) -> bool:
+    """True if `text` has clear English-only signals (function words like
+    "what/your/please", contractions, or English banking terms) AND no
+    AZ markers. Used to allow legitimate language switching."""
+    if not text:
+        return False
+    if _looks_like_azerbaijani(text):
+        return False
+    return bool(_EN_COMMON_WORDS_RE.search(text))
+
+
+def _resolve_language(user_id: str, text: str, classifier_lang: str) -> str:
+    """Final language decision combining classifier output, text heuristics,
+    and per-user stickiness.
+
+    Priority:
+      1. Strong AZ marker in text → AZ (always wins).
+      2. Classifier said AZ but text is heavily English → EN.
+      3. Classifier said EN but the user's *previous* turn was AZ and the
+         new message is NOT clearly English → stick with AZ. This catches
+         short follow-ups like "yox", "tesekkur", "ok" that the classifier
+         tends to label EN by default.
+      4. Otherwise trust classifier.
+
+    Stores the resolved language so the next turn can use it."""
+    if _looks_like_azerbaijani(text):
+        final = "az"
+    elif classifier_lang == "az" and _looks_clearly_english(text):
+        final = "en"
+    elif (
+        classifier_lang == "en"
+        and _user_last_language.get(user_id) == "az"
+        and not _looks_clearly_english(text)
+    ):
+        final = "az"
+    else:
+        # _override_language handles "classifier=az but text is heavy EN"
+        # as a secondary safety net.
+        final = _override_language(text, classifier_lang)
+
+    _user_last_language[user_id] = final
+    return final
+
 # ----------------------------------------------------------------------------
 # System prompts
 # ----------------------------------------------------------------------------
@@ -803,13 +882,21 @@ def handle(
     # ---- Layer 2 scope guard (skip if user is mid-flow) ----
     if not pending_stage:
         if not scope_guard(text):
-            early_lang = "az" if _looks_like_azerbaijani(text) else "en"
+            # Use stickiness so an out-of-scope follow-up in AZ doesn't flip
+            # to EN just because it's short ("ok bunu et", "olar bunu yaz").
+            if _looks_like_azerbaijani(text):
+                early_lang = "az"
+            elif _user_last_language.get(user_id) == "az" and not _looks_clearly_english(text):
+                early_lang = "az"
+            else:
+                early_lang = "en"
+            _user_last_language[user_id] = early_lang
             security.audit("scope_guard_blocked", user_id=user_id, text=text[:200])
             return AgentResponse(type="refusal", text=_refusal_message(early_lang))
 
     # ---- Classify (may return multiple parts for a compound message) ----
     decision = classify(text, pending=pending.get("draft"))
-    language = _override_language(text, decision.get("language", "en"))
+    language = _resolve_language(user_id, text, decision.get("language", "en"))
     decision["language"] = language
     parts: list[dict[str, Any]] = decision.get("parts") or []
     security.audit(
