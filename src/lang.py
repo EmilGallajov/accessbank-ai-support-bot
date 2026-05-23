@@ -37,6 +37,13 @@ _AZ_COMMON_WORDS_RE = re.compile(
     r"necə|nece|harada|harda|niyə|niye|hansı|hansi|"
     r"nə\s+vaxt|ne\s+vaxt|nə\s+üçün|ne\s+ucun|"
     r"bütün|butun|lazım|lazim|"
+    # politeness / help / acknowledgements (diacritic + latinized)
+    r"zəhmət|zehmet|zəhmət\s+olmasa|zehmet\s+olmasa|"
+    r"kömək|komek|kömək\s+et|komek\s+et|yardım|yardim|"
+    r"təşəkkür|tesekkur|təşəkkürlər|tesekkurler|sağ\s+ol|sag\s+ol|"
+    r"lütfən|lutfen|"
+    r"bəli|beli|xeyr|yox|tamam|yaxşı|yaxsi|"
+    r"anlamadım|anlamadim|anladım|anladim|başa\s+düşmədim|basa\s+dusmedim|"
     # misc
     r"problem|xahiş|xahis|göstər|goster|icra"
     r")\b",
