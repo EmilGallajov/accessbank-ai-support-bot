@@ -32,27 +32,71 @@ def _email_provider():
 # the letter `i`. The other diacritics (ş, ə, ç, ğ, ö, ü and their uppercase
 # forms) are unique to AZ/TR and safe to match.
 _AZ_DIACRITIC_RE = _re.compile(r"[şəçğöüŞƏÇĞÖÜ]")
+
+# Words that strongly signal Azerbaijani. Includes Latinized variants (no
+# diacritics) because users on phone keyboards frequently drop them — e.g.
+# "deye bilersenmi", "nomre", "mene", "xahis", "muraciet". Keep entries that
+# are unlikely to collide with English text.
 _AZ_COMMON_WORDS_RE = _re.compile(
-    r"\b(mənim|sənin|onun|bizim|sizin|köçürmə|kredit|kart|hesab|filial|"
-    r"şöbə|müraciət|məbləğ|şifr[əe]|daxil|ola|bilmir[əe]m|olub|olmadı|"
-    r"problem|xahiş|necə|harada|niyə|nə\s+vaxt|nə\s+üçün)\b",
+    r"\b("
+    # pronouns / possessives
+    r"mənim|menim|sənin|senin|onun|bizim|sizin|mənə|mene|sənə|sene|"
+    # nouns
+    r"köçürmə|kocurme|kredit|kart|kartım|kartim|"
+    r"hesab|hesabım|hesabim|filial|şöbə|sobe|"
+    r"müraciət|muraciet|məbləğ|mebleg|"
+    r"şifr[əe]|sifre|"
+    r"nömrə|nomre|nömrəsi|nomresi|nömrəni|nomreni|"
+    # verbs / auxiliaries
+    r"daxil|ola|bilmir[əe]m|bilmirem|"
+    r"bilərsən|bilersen|bilərsənmi|bilersenmi|bilirsən|bilirsen|"
+    r"deyə|deye|deyirəm|deyirem|"
+    r"olub|olmadı|olmadi|oldu|"
+    # question words / modifiers
+    r"necə|nece|harada|harda|niyə|niye|hansı|hansi|"
+    r"nə\s+vaxt|ne\s+vaxt|nə\s+üçün|ne\s+ucun|"
+    r"bütün|butun|lazım|lazim|"
+    # misc
+    r"problem|xahiş|xahis"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+# Azerbaijani agglutinative suffixes that essentially never appear at the end
+# of English words. Catches Latinized AZ that isn't in the word list above
+# (e.g. "userlerin", "kartlarini").
+_AZ_SUFFIX_RE = _re.compile(
+    r"\b\w+(?:lərin|lerin|ların|larin|lərini|lerini|larını|larini)\b",
     _re.IGNORECASE,
 )
 
 
+def _looks_like_azerbaijani(text: str) -> bool:
+    """Lightweight, classifier-free language check. True if `text` shows AZ
+    markers (diacritics, common AZ words, or AZ suffixes). Used both inside
+    `_override_language` and for early refusals (e.g. scope-guard) that fire
+    before the LLM classifier has run."""
+    return bool(
+        _AZ_DIACRITIC_RE.search(text)
+        or _AZ_COMMON_WORDS_RE.search(text)
+        or _AZ_SUFFIX_RE.search(text)
+    )
+
+
 def _override_language(text: str, classifier_lang: str) -> str:
     """Heuristic guardrail. The classifier's `language` field is sometimes wrong
-    (e.g. mis-classifies AZ as EN when the text is short, or vice versa).
+    (e.g. mis-classifies AZ as EN when the text is short or written without
+    diacritics, or vice versa).
 
     Rules:
-      - If the text contains Azerbaijani diacritics (ş, ə, ı, ç, ğ, ö, ü) OR
-        common Azerbaijani function words, force "az".
+      - If the text shows Azerbaijani markers (diacritics, common AZ words,
+        or AZ suffixes — including Latinized forms), force "az".
       - Else if classifier said "az" but the text looks like pure English
         (no AZ markers, ≥10 ASCII letters after stripping currency/numbers),
         force "en".
       - Otherwise trust the classifier.
     """
-    if _AZ_DIACRITIC_RE.search(text) or _AZ_COMMON_WORDS_RE.search(text):
+    if _looks_like_azerbaijani(text):
         return "az"
 
     if classifier_lang == "az":
@@ -746,8 +790,9 @@ def handle(
     # ---- Layer 2 scope guard (skip if user is mid-flow) ----
     if not pending_stage:
         if not scope_guard(text):
+            early_lang = "az" if _looks_like_azerbaijani(text) else "en"
             security.audit("scope_guard_blocked", user_id=user_id, text=text[:200])
-            return AgentResponse(type="refusal", text=_refusal_message("en"))
+            return AgentResponse(type="refusal", text=_refusal_message(early_lang))
 
     # ---- Classify (may return multiple parts for a compound message) ----
     decision = classify(text, pending=pending.get("draft"))
