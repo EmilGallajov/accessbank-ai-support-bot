@@ -70,6 +70,10 @@ including a *"reply YES to close / NO to reopen"* dialog with the customer.
 - Per-user rate limiting + JSON audit log of every input and decision.
 - Sensitive-data sanitiser strips card numbers, OTPs, password-like values
   before storage or email.
+- PII minimisation: when relaying a customer's follow-up reply to the dept
+  team, the customer's Telegram handle and ID are omitted from the email
+  body — the `[AB-YYYY-NNNN]` case-id in the subject is enough to identify
+  the thread internally.
 - 107 automated tests (40 red-team, 42 unit, 25 end-to-end).
 
 ---
@@ -366,7 +370,7 @@ Mapped to the 12 AI-agent security controls referenced in the project brief:
 - **Layer 3 — Output validation** strips system-prompt leaks, code blocks, and
   over-long outputs from anything the LLM produces before it leaves the system.
 
-### Secrets handling
+### Secrets & PII handling
 
 - All real secrets live **only** in `.env`, `credentials/credentials.json`, and
   `credentials/token.json`. All three are gitignored.
@@ -376,6 +380,11 @@ Mapped to the 12 AI-agent security controls referenced in the project brief:
   user PII (issue descriptions) and are gitignored. Don't commit them.
 - Screenshots uploaded by Telegram users land in `data/attachments/…` and are
   also gitignored.
+- Follow-up emails the bot sends back to a dept team (when the customer replies
+  *"NO + details"* to a resolution) **omit the customer's Telegram name and
+  numeric ID** — the dept team identifies the conversation by the
+  `[AB-YYYY-NNNN]` case-id in the subject, so the body stays free of PII the
+  team doesn't need.
 
 ---
 
