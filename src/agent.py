@@ -522,7 +522,7 @@ def _forward_user_reply_to_team(
         )
     body_lines = [
         f"Customer follow-up on case {case_row['case_id']}",
-        f"From: {user_name or 'Customer'} (Telegram ID: {user_id})",
+        #f"From: {user_name or 'Customer'} (Telegram ID: {user_id})",
         "",
         safe_text,
         "",
