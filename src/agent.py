@@ -14,8 +14,9 @@ from typing import Any
 
 import re as _re
 
-from . import cases, config, departments, email_gmail, kb, llm, safety, security
+from . import cases, config, departments, email_gmail, kb, lang, llm, safety, security
 from .departments import DEPT_KEYS, router_prompt_block, display_name
+from .lang import looks_like_azerbaijani as _looks_like_azerbaijani
 
 
 def _email_provider():
@@ -26,49 +27,8 @@ def _email_provider():
     return email_gmail
 
 
-# Note: we INTENTIONALLY exclude `ı` / `I` from this character class. The dotless
-# Azerbaijani `ı` (U+0131) case-folds to ASCII `i` under Unicode rules, so
-# including it with IGNORECASE would flag every English message that contains
-# the letter `i`. The other diacritics (ş, ə, ç, ğ, ö, ü and their uppercase
-# forms) are unique to AZ/TR and safe to match.
+# AZ diacritic regex kept here for the language-stickiness check below.
 _AZ_DIACRITIC_RE = _re.compile(r"[şəçğöüŞƏÇĞÖÜ]")
-
-# Words that strongly signal Azerbaijani. Includes Latinized variants (no
-# diacritics) because users on phone keyboards frequently drop them — e.g.
-# "deye bilersenmi", "nomre", "mene", "xahis", "muraciet". Keep entries that
-# are unlikely to collide with English text.
-_AZ_COMMON_WORDS_RE = _re.compile(
-    r"\b("
-    # pronouns / possessives
-    r"mənim|menim|sənin|senin|onun|bizim|sizin|mənə|mene|sənə|sene|"
-    # nouns
-    r"köçürmə|kocurme|kredit|kart|kartım|kartim|"
-    r"hesab|hesabım|hesabim|filial|şöbə|sobe|"
-    r"müraciət|muraciet|məbləğ|mebleg|"
-    r"şifr[əe]|sifre|"
-    r"nömrə|nomre|nömrəsi|nomresi|nömrəni|nomreni|"
-    # verbs / auxiliaries
-    r"daxil|ola|bilmir[əe]m|bilmirem|"
-    r"bilərsən|bilersen|bilərsənmi|bilersenmi|bilirsən|bilirsen|"
-    r"deyə|deye|deyirəm|deyirem|"
-    r"olub|olmadı|olmadi|oldu|"
-    # question words / modifiers
-    r"necə|nece|harada|harda|niyə|niye|hansı|hansi|"
-    r"nə\s+vaxt|ne\s+vaxt|nə\s+üçün|ne\s+ucun|"
-    r"bütün|butun|lazım|lazim|"
-    # misc
-    r"problem|xahiş|xahis"
-    r")\b",
-    _re.IGNORECASE,
-)
-
-# Azerbaijani agglutinative suffixes that essentially never appear at the end
-# of English words. Catches Latinized AZ that isn't in the word list above
-# (e.g. "userlerin", "kartlarini").
-_AZ_SUFFIX_RE = _re.compile(
-    r"\b\w+(?:lərin|lerin|ların|larin|lərini|lerini|larını|larini)\b",
-    _re.IGNORECASE,
-)
 
 # Concrete banking keywords. Used as a hallucination guard: if the classifier
 # returns intent="issue" but the user's text contains NONE of these, the
@@ -105,18 +65,6 @@ def _has_banking_content(text: str) -> bool:
     detect classifier hallucination where the LLM invents an issue summary
     from a vague help request that names no banking concept."""
     return bool(text) and bool(_BANKING_KEYWORDS_RE.search(text))
-
-
-def _looks_like_azerbaijani(text: str) -> bool:
-    """Lightweight, classifier-free language check. True if `text` shows AZ
-    markers (diacritics, common AZ words, or AZ suffixes). Used both inside
-    `_override_language` and for early refusals (e.g. scope-guard) that fire
-    before the LLM classifier has run."""
-    return bool(
-        _AZ_DIACRITIC_RE.search(text)
-        or _AZ_COMMON_WORDS_RE.search(text)
-        or _AZ_SUFFIX_RE.search(text)
-    )
 
 
 def _override_language(text: str, classifier_lang: str) -> str:
@@ -509,7 +457,14 @@ def _handle_resolution_decision(
     if not case_row:
         # Stale pending row — fall through to normal flow.
         cases.clear_pending(user_id)
-        return AgentResponse(type="reply", text="OK, what can I help you with next?")
+        return AgentResponse(
+            type="reply",
+            text=(
+                "Tamam, başqa nə ilə kömək edə bilərəm?"
+                if lang == "az"
+                else "OK, what can I help you with next?"
+            ),
+        )
 
     lowered = text.lower().strip().strip("!.,?")
 
@@ -579,7 +534,14 @@ def _handle_team_followup(
     case_row = cases.get_case(case_id) if case_id else None
     if not case_row:
         cases.clear_pending(user_id)
-        return AgentResponse(type="reply", text="OK, what can I help you with next?")
+        return AgentResponse(
+            type="reply",
+            text=(
+                "Tamam, başqa nə ilə kömək edə bilərəm?"
+                if lang == "az"
+                else "OK, what can I help you with next?"
+            ),
+        )
     return _forward_user_reply_to_team(
         user_id=user_id, user_name=user_name, case_row=case_row,
         text=text, lang=lang, reopen=False,
@@ -603,7 +565,13 @@ def _forward_user_reply_to_team(
         cases.clear_pending(user_id)
         return AgentResponse(
             type="reply",
-            text="I couldn't find the original email thread for your case. Please describe your issue again and I'll open a new ticket.",
+            text=(
+                "Müraciətinizin orijinal e-poçt yazışmasını tapa bilmədim. "
+                "Zəhmət olmasa problemi yenidən təsvir edin və yeni müraciət açacam."
+                if lang == "az"
+                else "I couldn't find the original email thread for your case. "
+                     "Please describe your issue again and I'll open a new ticket."
+            ),
         )
     body_lines = [
         f"Customer follow-up on case {case_row['case_id']}",
@@ -736,8 +704,12 @@ def handle(
     text = (text or "").strip()
 
     # If the user sent only an attachment with no caption, fall back to a soft prompt.
+    # No language context yet, so reply bilingually.
     if not text and not attachment_paths:
-        return AgentResponse(type="reply", text="I'm here — what can I help you with?")
+        return AgentResponse(
+            type="reply",
+            text="Buradayam — necə kömək edə bilərəm? / I'm here — what can I help you with?",
+        )
 
     # Merge incoming attachments into the pending draft early, so they're
     # carried through whether this turn finishes the case or just collects more.
