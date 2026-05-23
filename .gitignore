@@ -1,0 +1,55 @@
+# =============================================================================
+# Sensitive / private — NEVER commit
+# =============================================================================
+.env
+.env.local
+.env.*.local
+
+# Whole credentials/ is private by default; .gitkeep keeps the dir alive in git.
+credentials/*
+!credentials/.gitkeep
+
+# Persistent runtime data: SQLite, vector DB, audit logs, user-uploaded screenshots
+data/cases.db
+data/cases.db-journal
+data/audit.log
+data/bot.log
+data/chroma/
+data/attachments/
+
+# =============================================================================
+# Python / virtualenv
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+
+# =============================================================================
+# IDE / editor
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Hackathon artifacts — large local files we never want in git
+# =============================================================================
+*.pdf
+*.csv
+*.xlsx

@@ -1,0 +1,13 @@
+openai==1.58.1
+python-telegram-bot==21.9
+chromadb==0.5.23
+google-api-python-client==2.155.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+python-dotenv==1.0.1
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.3.0
+markdownify==0.13.1
+tiktoken==0.8.0
+msal==1.32.0
