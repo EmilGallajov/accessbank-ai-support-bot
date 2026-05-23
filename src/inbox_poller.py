@@ -22,16 +22,18 @@ CASE_ID_RE = re.compile(r"\bAB-\d{4}-\d{4}\b")
 CLASSIFIER_SYSTEM = """You read a customer-support email reply from one of AccessBank's internal departments. The original case is provided for context.
 
 Classify the reply into ONE of:
-- resolved: the team has solved the problem and given an answer/resolution
-- pending: the team is investigating, asking us for more info, or otherwise not yet done
-- needs_info: the team requires additional information from the customer
-- unknown: the reply is unrelated, automated bounce, or unclear
+- resolved: the team has clearly solved the problem and given a final answer / fix / refund / confirmation that the issue is closed
+- pending: the team has acknowledged the case but is still working on it (investigating, "we will get back to you", short acks like "received" / "noted" / "thanks", or any other ambiguous-but-from-the-team reply)
+- needs_info: the team is asking the CUSTOMER for additional details
+- unknown: ONLY use this for an automated bounce, an obvious spam / unrelated message, or a reply that is completely off-topic
+
+PREFER "pending" over "unknown" whenever the reply seems to be a real human from the team — even if it's terse, even if it doesn't fully resolve the case. We MUST surface every legitimate team reply to the customer.
 
 OUTPUT ONLY a JSON object:
 {
   "status": "resolved | pending | needs_info | unknown",
-  "summary": "one-sentence customer-facing summary of the reply (in the original case's language)",
-  "rationale": "one sentence"
+  "summary": "one-sentence customer-facing summary of what the team said, in the original case's language. If the reply is short, paraphrase or include the gist verbatim.",
+  "rationale": "one short sentence"
 }"""
 
 
@@ -62,7 +64,12 @@ STATUS_MAP = {
 }
 
 
-def _format_user_message(case_row: dict[str, Any], classification: dict[str, Any]) -> str:
+def _format_user_message(
+    case_row: dict[str, Any],
+    classification: dict[str, Any],
+    *,
+    raw_reply: str = "",
+) -> str:
     lang = case_row.get("language", "en")
     dept = departments.display_name(case_row["department"], lang)
     status = classification.get("status", "unknown")
@@ -97,6 +104,25 @@ def _format_user_message(case_row: dict[str, Any], classification: dict[str, Any
             f"_{summary}_\n\n"
             f"If you want to respond to the team, just type your reply here and "
             f"I'll forward it back to them in the same email thread."
+        )
+
+    # status == "unknown" — the classifier wasn't confident, but a real human
+    # from the team almost certainly replied. Never go silent on the customer:
+    # surface the raw reply (truncated) and let them decide what to do.
+    if raw_reply:
+        snippet = raw_reply.strip().replace("\n", " ")[:400]
+        if lang == "az":
+            return (
+                f"📩 *{case_row['case_id']}* ({dept}) müraciətinizə komandadan cavab gəldi:\n"
+                f"_{snippet}_\n\n"
+                f"Cavab vermək üçün mesajınızı yazın — eyni e-poçt yazışmasında komandaya çatdıracam. "
+                f"Müraciəti bağlamağa hazırsınızsa *YES* yazın."
+            )
+        return (
+            f"📩 The team replied on case *{case_row['case_id']}* ({dept}):\n"
+            f"_{snippet}_\n\n"
+            f"Type your response and I'll relay it back on the same email thread. "
+            f"Reply *YES* if you want to close this case."
         )
 
     return ""
@@ -168,11 +194,15 @@ async def _process_one(message_id: str, notify: NotifyCallable) -> None:
 
     # Put the user in the appropriate post-reply conversational stage so the
     # bot's next handler knows how to interpret their next message.
+    # Even for `unknown` classifications we set a followup stage — that way
+    # YES still works to close, and any free text gets relayed back to the team.
     new_stage: str | None = None
     if target_status == "resolved":
         new_stage = "awaiting_resolution_decision"
     elif target_status == "pending":
         new_stage = "awaiting_user_followup_to_team"
+    elif new_status_key == "unknown":
+        new_stage = "awaiting_resolution_decision"  # let user say YES to close or send a reply
 
     if new_stage:
         cases.set_pending(
@@ -185,7 +215,7 @@ async def _process_one(message_id: str, notify: NotifyCallable) -> None:
             },
         )
 
-    user_msg = _format_user_message(case_row, classification)
+    user_msg = _format_user_message(case_row, classification, raw_reply=body)
     if user_msg:
         try:
             await notify(case_row["user_id"], user_msg)
